@@ -42,7 +42,6 @@ def load_data(config):
     logging.info('Reading data...')
     text_iterator = TextIterator(
                         source=config.source_dataset,
-                        mt=config.mt_dataset,
                         target=config.target_dataset,
                         source_dicts=config.source_dicts,
                         target_dict=config.target_dict,
@@ -70,13 +69,11 @@ def load_data(config):
                         noise_source=config.noise_source,
                         f_ratio=config.f_ratio,
                         f_source=config.f_source_dataset,
-                        f_mt=config.f_mt_dataset,
                         f_target=config.f_target_dataset)
 
     if config.valid_freq and config.valid_source_dataset and config.valid_target_dataset:
         valid_text_iterator = TextIterator(
                             source=config.valid_source_dataset,
-                            mt=config.valid_mt_dataset,
                             target=config.valid_target_dataset,
                             source_dicts=config.source_dicts,
                             target_dict=config.target_dict,
@@ -98,7 +95,6 @@ def load_data(config):
     if config.valid_freq and config.valid_deixis_source_dataset and config.valid_deixis_target_dataset:
         valid_deixis_text_iterator = TextIterator(
                             source=config.valid_deixis_source_dataset,
-                            mt=config.valid_deixis_mt_dataset,
                             target=config.valid_deixis_target_dataset,
                             source_dicts=config.source_dicts,
                             target_dict=config.target_dict,
@@ -120,7 +116,6 @@ def load_data(config):
     if config.valid_freq and config.valid_cohesion_source_dataset and config.valid_cohesion_target_dataset:
         valid_cohesion_text_iterator = TextIterator(
                             source=config.valid_cohesion_source_dataset,
-                            mt=config.valid_cohesion_mt_dataset,
                             target=config.valid_cohesion_target_dataset,
                             source_dicts=config.source_dicts,
                             target_dict=config.target_dict,
@@ -151,8 +146,6 @@ def train(config, sess):
     num_gpus = len(util.get_available_gpus())
     num_replicas = max(1, num_gpus)
 
-    target_dict = None
-    # check MRT limit condition
     if config.loss_function == 'MRT':
         assert config.gradient_aggregation_steps == 1
         assert config.max_sentences_per_device == 0, "MRT mode does not support sentence-based split"
@@ -164,8 +157,6 @@ def train(config, sess):
             assert (config.samplesN * config.maxlen <= config.token_batch_size), "need to make sure candidates of a sentence could be " \
                                                                                       "feed into the model"
 
-        if config.sample_way == 'artificial':
-            target_dict = util.load_dict(config.target_dict, config.model_type)
 
 
     logging.info('Building model...')
@@ -219,7 +210,7 @@ def train(config, sess):
         writer = None
 
     updater = ModelUpdater(config, num_gpus, replicas, optimizer, global_step,
-                           writer, target_dict)
+                           writer)
 
     if config.exponential_smoothing > 0.0:
         smoothing = ExponentialSmoothing(config.exponential_smoothing)
@@ -258,16 +249,16 @@ def train(config, sess):
         config.max_epochs = progress.eidx+1
     for progress.eidx in range(progress.eidx, config.max_epochs):
         logging.info('Starting epoch {0}'.format(progress.eidx))
-        for source_sents, mt_sents, target_sents in text_iterator:
+        for source_sents, target_sents in text_iterator:
             if len(source_sents[0][0]) != config.factors:
                 logging.error('Mismatch between number of factors in settings ({0}), and number in training corpus ({1})\n'.format(config.factors, len(source_sents[0][0])))
                 sys.exit(1)
             if config.weighted_conservative_loss:
-                x_in, x_mask_in, x_in_p, x_p_mask_in, y_in, y_mask_in, penalty_weight = util.prepare_data_weight(
-                    source_sents, mt_sents, target_sents, num_to_target, ScorerProvider, config.factors, maxlen=None)
+                x_in, x_mask_in, y_in, y_mask_in, penalty_weight = util.prepare_data_weight(
+                    source_sents, target_sents, num_to_target, num_to_source, ScorerProvider, config.factors, maxlen=None)
             else:
-                x_in, x_mask_in, x_in_p, x_p_mask_in, y_in, y_mask_in = util.prepare_data(
-                    source_sents, mt_sents, target_sents, config.factors, maxlen=None)
+                x_in, x_mask_in, y_in, y_mask_in = util.prepare_data(
+                    source_sents, target_sents, config.factors, maxlen=None)
                 penalty_weight = None
             if x_in is None:
                 logging.info('Minibatch with zero sample under length {0}'.format(config.maxlen))
@@ -275,13 +266,8 @@ def train(config, sess):
             write_summary_for_this_batch = config.summary_freq and ((progress.uidx % config.summary_freq == 0) or (config.finish_after and progress.uidx % config.finish_after == 0))
             (factors, seqLen, batch_size) = x_in.shape
 
-            # make a choice whether to zero out source-side information for each mini-batch
-            if random.random() < config.extreme_noise:
-                mask = 0.0
-            else:
-                mask = 1.0
-            output = updater.update(sess, x_in, x_mask_in, x_in_p, x_p_mask_in, y_in, y_mask_in, num_to_target,
-                                  write_summary_for_this_batch, config.label_smoothing, penalty_weight, mask)
+            output = updater.update(sess, x_in, x_mask_in, y_in, y_mask_in, num_to_target,
+                                  write_summary_for_this_batch, config.label_smoothing, penalty_weight)
             if config.print_per_token_pro == False:
                 total_loss += output
             else:
@@ -312,38 +298,34 @@ def train(config, sess):
                 n_words = 0
 
             if config.sample_freq and progress.uidx % config.sample_freq == 0:
-                x_small, x_mask_small, x_p_small, x_p_mask_small, y_small = \
-                    x_in[:, :, :10], x_mask_in[:, :10], x_in_p[:, :10], x_p_mask_in[:, :10], y_in[:, :10]
+                x_small, x_mask_small, y_small = \
+                    x_in[:, :, :10], x_mask_in[:, :10], y_in[:, :10]
                 samples = translate_utils.translate_batch(
-                    sess, random_sampler, x_small, x_mask_small, x_p_small, x_p_mask_small,
+                    sess, random_sampler, x_small, x_mask_small,
                     config.translation_maxlen, 0.0)
                 assert len(samples) == len(x_small.T) == len(y_small.T), \
                     (len(samples), x_small.shape, y_small.shape)
-                for xx, pp, yy, ss in zip(x_small.T, x_p_small.T, y_small.T, samples):
+                for xx, yy, ss in zip(x_small.T, y_small.T, samples):
                     source = util.factoredseq2words(xx, num_to_source)
-                    mt = util.seq2words(pp, num_to_target)
                     target = util.seq2words(yy, num_to_target)
                     sample = util.seq2words(ss[0][0], num_to_target)
                     logging.info('SOURCE: {}'.format(source))
-                    logging.info('MT: {}'.format(mt))
                     logging.info('TARGET: {}'.format(target))
                     logging.info('SAMPLE: {}'.format(sample))
 
             if config.beam_freq and progress.uidx % config.beam_freq == 0:
-                x_small, x_mask_small, x_p_small, x_p_mask_small, y_small = \
-                    x_in[:, :, :10], x_mask_in[:, :10], x_in_p[:, :10], x_p_mask_in[:, :10], y_in[:, :10]
+                x_small, x_mask_small, y_small = \
+                    x_in[:, :, :10], x_mask_in[:, :10], y_in[:, :10]
                 samples = translate_utils.translate_batch(
-                    sess, beam_search_sampler, x_small, x_mask_small, x_p_small, x_p_mask_small,
+                    sess, beam_search_sampler, x_small, x_mask_small,
                     config.translation_maxlen, config.normalization_alpha)
                 # samples is a list with shape batch x beam x len
                 assert len(samples) == len(x_small.T) == len(y_small.T), \
                     (len(samples), x_small.shape, y_small.shape)
-                for xx, pp, yy, ss in zip(x_small.T, x_p_small.T, y_small.T, samples):
+                for xx, yy, ss in zip(x_small.T, y_small.T, samples):
                     source = util.factoredseq2words(xx, num_to_source)
-                    mt = util.seq2words(pp, num_to_target)
                     target = util.seq2words(yy, num_to_target)
                     logging.info('SOURCE: {}'.format(source))
-                    logging.info('MT: {}'.format(mt))
                     logging.info('TARGET: {}'.format(target))
                     for i, (sample_seq, cost) in enumerate(ss):
                         sample = util.seq2words(sample_seq, num_to_target)
@@ -374,7 +356,6 @@ def train(config, sess):
                         logging.info('Early Stop!')
                         progress.estop = True
                         break
-
                 if config.valid_consis_script is not None:
                     dex_score, lex_score = validate_consis_with_script(sess, replicas[0], config, valid_deixis_text_iterator,
                                                 valid_cohesion_text_iterator)
@@ -485,7 +466,6 @@ def validate(session, model, config, text_iterator):
     return avg_ce
 
 def validate_consis_with_script(session, model, config, deixis_text_iterator, cohesion_text_iterator):
-    # validate contrastive test sets during training
     logging.info('Starting external consistency set validation.')
     logging.info('deixis set')
     out = tempfile.NamedTemporaryFile(mode='w')
@@ -552,7 +532,6 @@ def validate_with_script(session, beam_search_sampler):
     out = tempfile.NamedTemporaryFile(mode='w')
     translate_utils.translate_file(
         input_file=open(config.valid_source_dataset, encoding="UTF-8"),
-        input_p_file=open(config.valid_mt_dataset, encoding="UTF-8"),
         output_file=out,
         session=session,
         sampler=beam_search_sampler,
@@ -617,26 +596,23 @@ def calc_cross_entropy_per_sentence(session, model, config, text_iterator, label
         <EOS> symbol).
     """
     ce_vals, token_counts = [], []
-    for xx, pp, yy in text_iterator:
+    for xx, yy in text_iterator:
         if len(xx[0][0]) != config.factors:
             logging.error('Mismatch between number of factors in settings ' \
                           '({0}) and number present in data ({1})'.format(
                           config.factors, len(xx[0][0])))
             sys.exit(1)
-        x, x_mask, x_p, x_p_mask, y, y_mask = util.prepare_data(xx, pp, yy, config.factors,
+        x, x_mask, y, y_mask = util.prepare_data(xx, yy, config.factors,
                                                  maxlen=None)
 
         # Run the minibatch through the model to get the sentence-level cross
         # entropy values.
         feeds = {model.inputs.x: x,
                  model.inputs.x_mask: x_mask,
-                 model.inputs.x_p: x_p,
-                 model.inputs.x_p_mask: x_p_mask,
                  model.inputs.y: y,
                  model.inputs.y_mask: y_mask,
                  model.inputs.training: False,
-                 model.inputs.label_smoothing: label_smoothing,
-                 model.inputs.mask: 1.0}
+                 model.inputs.label_smoothing: label_smoothing}
         # loss_per_sentence就是每个句子的sum(-logP)
         batch_ce_vals = session.run(model.loss_per_sentence, feed_dict=feeds)
 

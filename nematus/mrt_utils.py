@@ -10,50 +10,9 @@ from metrics.scorer_provider import ScorerProvider
 import translate_utils
 import util
 import pdb
-from random import choice
 
 
-def lookup_token(t, d, unk_val):
-    return d[t] if t in d else unk_val
-
-def word_dropout(sent, dropout, dic):
-    """sent is a list of sentence index, without _eos_ token"""
-    drop_mask = (np.random.random(len(sent)) < dropout).astype(int)
-    prohibit = dic['_eos']
-    # deleting with probability of dropout
-    for i in range(len(drop_mask) - 1, -1, -1):
-        if drop_mask[i] == 1 and sent[i] != prohibit:
-            sent.pop(i)
-    # replacing
-    drop_mask = (np.random.random(len(sent)) < dropout).astype(int)
-    # TODO: make sure all special tokens are ranked on the top of dictionary and included in low=max()
-    replacement = np.random.randint(low=max(dic['<EOS>'], dic['<GO>'], dic['<UNK>']) + 1, high=len(dic) - 1,
-                                       size=len(sent))
-
-    for i, item in enumerate(drop_mask):
-        if item == 1 and sent[i] != prohibit:
-            sent[i] = replacement[i]
-    # swapping
-    drop_mask = (np.random.random(len(sent)) < dropout).astype(int)
-    for i, item in enumerate(drop_mask):
-        if item == 1:
-            index = choice([-3, -2, -1, 1, 2, 3])
-            if index > 0:
-                if i + index >= len(sent):
-                    index = -index
-                if i + index < 0:
-                    continue
-            else:
-                if i + index < 0:
-                    index = -index
-                if i + index >= len(sent):
-                    continue
-            if sent[i] != prohibit and sent[i + index] != prohibit:
-                sent[i], sent[i + index] = sent[i + index], sent[i]
-
-    return sent
-
-def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, target_dict):
+def full_sampler(replica, sampler, sess, config, x, x_mask, y, y_mask, penalty_weight):
     """generate candidate sentences used for Minimum Risk Training
 
     Args:
@@ -75,21 +34,15 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
     """
 
     sampleN = config.samplesN
-    # convert from time domain to batch domain
-    y = list(map(list, zip(*y)))
-    # y: batch_size X len
-    y_mask = list(map(list, zip(*y_mask)))
 
     # set maximum number of tokens of sampled candidates
-    dynamic_max_len = max(int(config.max_len_a * x_mask.shape[0] + config.max_len_b), int(x_p_mask.shape[0] + 10))
+    dynamic_max_len = int(config.max_len_a * x_mask.shape[0] + config.max_len_b)
     max_translation_len = min(config.translation_maxlen, dynamic_max_len)
 
     if config.sample_way == 'beam_search':
 
         x_new = np.repeat(x, sampleN, axis=2)
         x_mask_new = np.repeat(x_mask, sampleN, axis=1)
-        x_p_new = np.repeat(x_p, sampleN, axis=1)
-        x_p_mask_new = np.repeat(x_p_mask, sampleN, axis=1)
         if penalty_weight is not None:
             penalty_weight = np.repeat(penalty_weight, sampleN, axis=1)
 
@@ -100,14 +53,12 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
             # split the numpy array into a list of numpy array
             split_x = np.array_split(x, num_split, 2)
             split_x_mask = np.array_split(x_mask, num_split, 1)
-            split_x_p = np.array_split(x_p, num_split, 1)
-            split_x_p_mask = np.array_split(x_p_mask, num_split, 1)
             sample_and_score = []
             # feed sub-batch into model to generate samples
             for i in range(len(split_x)):
-                sample_and_score += translate_utils.translate_batch(sess, sampler, split_x[i], split_x_mask[i], split_x_p[i], split_x_p_mask[i], max_translation_len, config.normalization_alpha)
+                sample_and_score += translate_utils.translate_batch(sess, sampler, split_x[i], split_x_mask[i], max_translation_len, config.normalization_alpha)
         else:
-            sample_and_score = translate_utils.translate_batch(sess, sampler, x, x_mask, x_p, x_p_mask, max_translation_len, config.normalization_alpha)
+            sample_and_score = translate_utils.translate_batch(sess, sampler, x, x_mask, max_translation_len, config.normalization_alpha)
 
         # sample_and_score: outer: batch_size, inner: sampleN elements(each represents a sample)
 
@@ -135,16 +86,14 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
             num_split = math.ceil(x_mask.shape[1] / config.max_sentences_of_sampling)
             split_x = np.array_split(x, num_split, 2)
             split_x_mask = np.array_split(x_mask, num_split, 1)
-            split_x_p = np.array_split(x_p, num_split, 1)
-            split_x_p_mask = np.array_split(x_p_mask, num_split, 1)
             # set normalization_alpha to 0 for randomly sampling (no effect on sampled sentences)
             sample = translate_utils.translate_batch(
-                sess, sampler, split_x[0], split_x_mask[0], split_x_p[0], split_x_p_mask[0], max_translation_len, 0.0)
+                sess, sampler, split_x[0], split_x_mask[0], max_translation_len, 0.0)
             for i in range(1, len(split_x)):
-                tmp = translate_utils.translate_batch(sess, sampler, split_x[i], split_x_mask[i], split_x_p[i], split_x_p_mask[i], max_translation_len, 0.0)
+                tmp = translate_utils.translate_batch(sess, sampler, split_x[i], split_x_mask[i], max_translation_len, 0.0)
                 sample = np.concatenate((sample, tmp))
         else:
-            sample = translate_utils.translate_batch(sess, sampler, x, x_mask, x_p, x_p_mask, max_translation_len, 0.0)
+            sample = translate_utils.translate_batch(sess, sampler, x, x_mask, max_translation_len, 0.0)
         # sample: list: (batch_size, sampleN), each element is a tuple of (numpy array of a sampled sentence, its score)
         for i in range(len(samples)):
             for ss in sample[i]:
@@ -170,8 +119,6 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
             index.append(len(samples[i]))
         x_new = np.repeat(x, index, axis=2)
         x_mask_new = np.repeat(x_mask, index, axis=1)
-        x_p_new = np.repeat(x_p, index, axis=1)
-        x_p_mask_new = np.repeat(x_p_mask, index, axis=1)
         if penalty_weight is not None:
             penalty_weight = np.repeat(penalty_weight, index, axis=1)
 
@@ -182,47 +129,16 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
         for i in range((len(samples))):
             index[0].append(index[0][i] + len(samples[i]))
 
-    elif config.sample_way == 'artificial':
-        samples = []
-        for i in range(x_mask.shape[1]):
-            samples.append([])
-        for i in range(len(samples)):
-            y_len = int(sum(y_mask[i]))
-            # trucate <EOS>
-            ref = y[i][:y_len - 1]
-            for j in range(sampleN):
-                samples[i].append(word_dropout(ref, config.mrt_noise, target_dict))
-        # samples: list with shape (batch_size, sampleN, len), uneven
-
-        # remove duplicate samples
-        for i in range(len(samples)):
-            samples[i].sort()
-            samples[i] = [s for s, _ in itertools.groupby(samples[i])]
-
-        # remove the corresponding x and x_mask
-        index = []
-        for i in range(len(samples)):
-            index.append(len(samples[i]))
-        x_new = np.repeat(x, index, axis=2)
-        x_mask_new = np.repeat(x_mask, index, axis=1)
-        x_p_new = np.repeat(x_p, index, axis=1)
-        x_p_mask_new = np.repeat(x_p_mask, index, axis=1)
-        if penalty_weight is not None:
-            penalty_weight = np.repeat(penalty_weight, index, axis=1)
-
-        # calculate the the number of remaining candidate samplings for each source sentence,
-        # store the information in 'index' for the subsequent normalisation of distribution and calculation of
-        # expected risk.
-        index = [[0]]
-        for i in range((len(samples))):
-            index[0].append(index[0][i] + len(samples[i]))
     else:
         assert False
 
     # add reference in candidate sentences:
 
+    # convert from time domain to batch domain
+    y = list(map(list, zip(*y)))
     # y: batch_size X len
     if config.mrt_reference:
+        y_mask = list(map(list, zip(*y_mask)))
         for i in range(len(samples)):
             # delete the pad of reference
             lenth = int(sum(y_mask[i]))
@@ -251,7 +167,7 @@ def full_sampler(replica, sampler, sess, config, x, x_mask, x_p, x_p_mask, y, y_
         y_new[:lengths_y[idx], idx] = s_y
         y_mask_new[:lengths_y[idx] + 1, idx] = 1.
 
-    return x_new.tolist(), x_mask_new.tolist(), x_p_new.tolist(), x_p_mask_new.tolist(), y_new.tolist(), y_mask_new.tolist(), y, index, penalty_weight
+    return x_new.tolist(), x_mask_new.tolist(), y_new.tolist(), y_mask_new.tolist(), y, index, penalty_weight
 
 
 def cal_metrics_score(samples, config, num_to_target, refs, index):

@@ -79,11 +79,6 @@ class TranslationSettings(BaseSettings):
                 help="input file (default: standard input)")
 
             self._parser.add_argument(
-                '-ip', '--input_p', type=argparse.FileType('r'),
-                default=sys.stdin, metavar='PATH',
-                help="input file of mt (default: standard input)")
-
-            self._parser.add_argument(
                 '-o', '--output', type=argparse.FileType('w'),
                 default=sys.stdout, metavar='PATH',
                 help="output file (default: standard output)")
@@ -196,11 +191,6 @@ class ScorerBaseSettings(BaseSettings, metaclass=ABCMeta):
                 '-s', '--source', type=argparse.FileType('r'),
                 required=True, metavar='PATH',
                 help="source text file")
-
-            self._parser.add_argument(
-                '-mt', '--mt', type=argparse.FileType('r'),
-                required=True, metavar='PATH',
-                help="mt text file")
 
 
 class ScorerSettings(ScorerBaseSettings):

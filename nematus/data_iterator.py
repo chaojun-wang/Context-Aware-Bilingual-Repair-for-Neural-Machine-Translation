@@ -39,7 +39,7 @@ class FileWrapper(object):
 
 class TextIterator:
     """Simple Bitext iterator."""
-    def __init__(self, source, mt, target,
+    def __init__(self, source, target,
                  source_dicts, target_dict,
                  model_type,
                  batch_size=128,
@@ -65,56 +65,48 @@ class TextIterator:
                  noise_source=False,
                  f_ratio=0.0,
                  f_source=None,
-                 f_mt=None,
                  f_target=None):
         if keep_data_in_memory:
             if f_ratio != 1:
-                self.source, self.mt, self.target = FileWrapper(source), FileWrapper(mt), FileWrapper(target)
+                self.source, self.target = FileWrapper(source), FileWrapper(target)
             if f_ratio:
-                self.f_source, self.f_mt, self.f_target = FileWrapper(f_source), FileWrapper(f_mt), FileWrapper(f_target)
+                self.f_source, self.f_target = FileWrapper(f_source), FileWrapper(f_target)
             if shuffle_each_epoch:
                 if f_ratio != 1:
                     r = numpy.random.permutation(len(self.source))
                     self.source.shuffle_lines(r)
-                    self.mt.shuffle_lines(r)
                     self.target.shuffle_lines(r)
                 if f_ratio:
                     r = numpy.random.permutation(len(self.f_source))
                     self.f_source.shuffle_lines(r)
-                    self.f_mt.shuffle_lines(r)
                     self.f_target.shuffle_lines(r)
         elif shuffle_each_epoch:
             self.chunk_size = chunk_size
             if f_ratio != 1:
                 self.source_orig = source
-                self.mt_orig = mt
                 self.target_orig = target
                 # three file objects, storing shuffled temporarily parallel datasets
-                self.source, self.mt, self.target = shuffle.jointly_shuffle_files(
-                    [self.source_orig, self.mt_orig, self.target_orig], chunk_size=self.chunk_size, temporary=True)
+                self.source, self.target = shuffle.jointly_shuffle_files(
+                    [self.source_orig, self.target_orig], chunk_size=self.chunk_size, temporary=True)
             if f_ratio:
                 self.f_source_orig = f_source
-                self.f_mt_orig = f_mt
                 self.f_target_orig = f_target
                 # three file objects, storing shuffled temporarily parallel datasets
-                self.f_source, self.f_mt, self.f_target = shuffle.jointly_shuffle_files(
-                    [self.f_source_orig, self.f_mt_orig, self.f_target_orig], chunk_size=self.chunk_size, temporary=True)
+                self.f_source, self.f_target = shuffle.jointly_shuffle_files(
+                    [self.f_source_orig, self.f_target_orig], chunk_size=self.chunk_size, temporary=True)
         else:
             if f_ratio != 1:
                 self.source = fopen(source, 'r')
-                self.mt = fopen(mt, 'r')
                 self.target = fopen(target, 'r')
             if f_ratio:
                 self.f_source = fopen(f_source, 'r')
-                self.f_mt = fopen(f_mt, 'r')
                 self.f_target = fopen(f_target, 'r')
         self.source_dicts = []
         for source_dict in source_dicts:
             self.source_dicts.append(load_dict(source_dict, model_type))
         self.target_dict = load_dict(target_dict, model_type)
-        if data_mode == 'multiple' or data_mode == 'ape' :
-            self.re_target_dict = reverse_dict(self.target_dict)
-            self.re_source_dicts = [reverse_dict(d) for d in self.source_dicts]
+        self.re_target_dict = reverse_dict(self.target_dict)
+        self.re_source_dicts = [reverse_dict(d) for d in self.source_dicts]
         self.noise_source = noise_source
 
         # Determine the UNK value for each dictionary (the value depends on
@@ -153,7 +145,7 @@ class TextIterator:
         self.fine_tune = False
 
 
-        if self.data_mode == 'multiple' or self.data_mode == 'ape':
+        if self.data_mode == 'monlig':
             self.mode_probs = {'sample': self.sample_mode_pro, 'noise': self.noise_mode_pro, 'beam': self.beam_mode_pro} \
                 if is_train else {'sample': 0, 'noise': 0, 'beam': 1}
 
@@ -179,7 +171,6 @@ class TextIterator:
         self.sort_by_length = sort_by_length
 
         self.source_buffer = []
-        self.mt_buffer = []
         self.target_buffer = []
         self.k = batch_size * maxibatch_size
         
@@ -195,29 +186,25 @@ class TextIterator:
                 if self.fine_tune:
                     r = numpy.random.permutation(len(self.f_source))
                     self.f_source.shuffle_lines(r)
-                    self.f_mt.shuffle_lines(r)
                     self.f_target.shuffle_lines(r)
                 else:
                     r = numpy.random.permutation(len(self.source))
                     self.source.shuffle_lines(r)
-                    self.mt.shuffle_lines(r)
                     self.target.shuffle_lines(r)
             else:
                 if self.fine_tune:
-                    self.f_source, self.f_mt, self.f_target = shuffle.jointly_shuffle_files(
-                        [self.f_source_orig, self.f_mt_orig, self.f_target_orig], chunk_size=self.chunk_size,
+                    self.f_source, self.f_target = shuffle.jointly_shuffle_files(
+                        [self.f_source_orig, self.f_target_orig], chunk_size=self.chunk_size,
                         temporary=True)
                 else:
-                    self.source, self.mt, self.target = shuffle.jointly_shuffle_files(
-                        [self.source_orig, self.mt_orig, self.target_orig], chunk_size=self.chunk_size, temporary=True)
+                    self.source, self.target = shuffle.jointly_shuffle_files(
+                        [self.source_orig, self.target_orig], chunk_size=self.chunk_size, temporary=True)
         else:
             if self.fine_tune:
                 self.f_source.seek(0)
-                self.f_mt.seek(0)
                 self.f_target.seek(0)
             else:
                 self.source.seek(0)
-                self.mt.seek(0)
                 self.target.seek(0)
 
     def read_sample(self, sample):
@@ -308,36 +295,33 @@ class TextIterator:
             raise StopIteration
 
         source = []
-        mt = []
         target = []
 
         longest_source = 0
-        longest_mt = 0
         longest_target = 0
 
         # fill buffer, if it's empty
-        assert len(self.source_buffer) == len(self.mt_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
+        assert len(self.source_buffer) == len(self.target_buffer), 'Buffer size mismatch!'
 
         if len(self.source_buffer) == 0:
             while True:
                 if random.random() < self.f_ratio:
-                    s_file, m_file, t_file = self.f_source, self.f_mt, self.f_target
+                    s_file, t_file = self.f_source, self.f_target
                     # not allow source-side noisy for fine-tuning data, but keep mt-side noisy consistent with sythetic data
                     self.fine_tune = True
                 else:
-                    s_file, m_file, t_file = self.source, self.mt, self.target
+                    s_file, t_file = self.source, self.target
                     self.fine_tune = False
-                ss = s_file.readline()
                 tt = t_file.readline()
-                mm = m_file.readline()
+                ss = s_file.readline()
                 # check whether file finished reading
                 if not ss:
                     break
-                if self.data_mode == 'multiple':
-                    # generate mt-side sentence
-                    beam_sents = [i.strip() for i in mm.split(" _eos_eos ")[0].split(" _eos ")]
+                if self.data_mode == 'monlig':
+                    # generate noisy source-side data
+                    beam_sents = [i.strip() for i in ss.split(" _eos_eos ")[0].split(" _eos ")]
                     out_sents = [i.strip() for i in tt.split(" _eos ")]
-                    samples = mm.split(" _eos_eos ")[1:]
+                    samples = ss.split(" _eos_eos ")[1:]
                     if self.is_train:
                         assert len(samples) == len(beam_sents) == len(out_sents)
 
@@ -345,8 +329,9 @@ class TextIterator:
                     for i in range(len(beam_sents)):
                         base_translation = self.get_base_translation(i, beam_sents, out_sents, samples)
                         current_inp = current_inp + base_translation + ["_eos"]
-                    mm = current_inp[:-1]
+                    ss = current_inp[:-1]
 
+                elif self.data_mode == 'bilig':
                     if self.noise_source == True and self.fine_tune == False:
                         # generate noisy source-side data
                         beam_sents = [i.strip() for i in ss.split(" _eos ")]
@@ -356,49 +341,50 @@ class TextIterator:
                             base_translation = self.get_base_translation(i, beam_sents, out_sents, samples, True)
                             current_inp = current_inp + base_translation + ["_eos"]
                         ss = current_inp[:-1]
-                elif self.data_mode == 'ape' and self.is_train:
-                    samples = [mm]
-                    beam_sents, out_sents = None, None
-                    mm = self.get_base_translation(0, beam_sents, out_sents, samples)
+                    else: # self.noise_source == False or self.fine_tune == True
+                        ss = ss.split()
+                elif self.data_mode == 'single':
+                    if self.noise_source == True and self.fine_tune == False:
+                        # generate noisy source-side data
+                        base_translation = ss.strip()
+                        base_translation = self.word_dropout(base_translation,
+                                                             dropout=self.beam_dropout,
+                                                             dic=self.source_dicts[0], tag=True)
+                    else: # self.noise_source == False or self.fine_tune == True
+                        ss = ss.split()
                 else:
-                    mm = mm.split()
+                    assert False, 'data_mode must be one of the modes among single, monlig and bilig'
 
-                if self.noise_source == False or self.fine_tune == True:
-                    ss = ss.split()
                 tt = tt.split()
 
-                if self.skip_empty and (len(ss) == 0 or len(tt) == 0 or len(mm) == 0):
+                if self.skip_empty and (len(ss) == 0 or len(tt) == 0):
                     continue
-                if len(ss) > self.maxlen or len(tt) > self.maxlen or len(mm) > self.maxlen:
+                if len(ss) > self.maxlen or len(tt) > self.maxlen:
                     continue
 
                 self.source_buffer.append(ss)
-                self.mt_buffer.append(mm)
                 self.target_buffer.append(tt)
                 if len(self.source_buffer) == self.k:
                     break
 
-            if len(self.source_buffer) == 0 or len(self.target_buffer) == 0 or len(self.mt_buffer) == 0:
+            if len(self.source_buffer) == 0 or len(self.target_buffer) == 0:
                 self.end_of_data = False
                 self.reset()
                 raise StopIteration
 
             # sort by source/target buffer length
             if self.sort_by_length:
-                tlen = numpy.array([max(len(s),len(m), len(t)) for (s,m,t) in zip(self.source_buffer,self.mt_buffer,self.target_buffer)])
+                tlen = numpy.array([max(len(s), len(t)) for (s, t) in zip(self.source_buffer, self.target_buffer)])
                 tidx = tlen.argsort()
 
                 _sbuf = [self.source_buffer[i] for i in tidx]
-                _mbuf = [self.mt_buffer[i] for i in tidx]
                 _tbuf = [self.target_buffer[i] for i in tidx]
 
                 self.source_buffer = _sbuf
-                self.mt_buffer = _mbuf
                 self.target_buffer = _tbuf
 
             else:
                 self.source_buffer.reverse()
-                self.mt_buffer.reverse()
                 self.target_buffer.reverse()
 
         def lookup_token(t, d, unk_val):
@@ -425,16 +411,6 @@ class TextIterator:
                     tmp.append(w)
                 ss_indices = tmp
 
-                # read from mt file and map to word index
-                mm = self.mt_buffer.pop()
-                mm_indices = [lookup_token(w, self.target_dict,
-                                           self.target_unk_val) for w in mm]
-                # -----------------------------TODO: nonsense------------------#
-                if self.target_vocab_size != None:
-                    mm_indices = [w if w < self.target_vocab_size
-                                  else self.target_unk_val
-                                  for w in mm_indices]
-                # -------------------------------------------------------------#
 
                 # read from target file and map to word index
                 tt = self.target_buffer.pop()
@@ -447,35 +423,28 @@ class TextIterator:
                                   for w in tt_indices]
                 #-------------------------------------------------------------#
                 source.append(ss_indices)
-                mt.append(mm_indices)
                 target.append(tt_indices)
                 longest_source = max(longest_source, len(ss_indices))
-                longest_mt = max(longest_mt, len(mm_indices))
                 longest_target = max(longest_target, len(tt_indices))
 
                 if self.token_batch_size:
                     if len(source)*longest_source > self.token_batch_size or \
-                        len(mt) * longest_mt > self.token_batch_size or \
                         len(target)*longest_target > self.token_batch_size:
                         # remove last sentence pair (that made batch over-long)
                         source.pop()
-                        mt.pop()
                         target.pop()
                         self.source_buffer.append(ss)
-                        self.mt_buffer.append(mm)
                         self.target_buffer.append(tt)
 
                         break
 
                 else:
                     if len(source) >= self.batch_size or \
-                        len(target) >= self.batch_size or \
-                            len(mt) >= self.batch_size:
+                        len(target) >= self.batch_size:
                         break
         except IOError:
             self.end_of_data = True
 
 # source(batch_size, num_tokens, n_factor), uneven
-# mt(batch_size, num_tokens), uneven
 # target(batch_size, num_tokens), uneven
-        return source, mt, target
+        return source, target

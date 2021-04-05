@@ -7,10 +7,10 @@ from transformer import INT_DTYPE, FLOAT_DTYPE
 from transformer_layers import get_shape_list, get_positional_signal
 
 
-class PEncoderOutput:
-    def __init__(self, penc_output, p_cross_attn_mask):
-        self.penc_output = penc_output
-        self.p_cross_attn_mask = p_cross_attn_mask
+class EncoderOutput:
+    def __init__(self, enc_output, cross_attn_mask):
+        self.enc_output = enc_output
+        self.cross_attn_mask = cross_attn_mask
 
 
 class ModelAdapter:
@@ -48,12 +48,9 @@ class ModelAdapter:
             with tf.name_scope('encode'):
                 enc_output, cross_attn_mask = self._model.enc.encode(
                     self._model.source_ids, self._model.source_mask)
-            with tf.name_scope('pencode'):
-                penc_output, p_cross_attn_mask = self._model.penc.encode(
-                    self._model.mt_ids, self._model.mt_mask, enc_output, cross_attn_mask)
-            return PEncoderOutput(penc_output, p_cross_attn_mask)
+            return EncoderOutput(enc_output, cross_attn_mask)
 
-    def generate_decoding_function(self, pencoder_output):
+    def generate_decoding_function(self, encoder_output):
 
         with tf.name_scope(self._scope):
             # Generate a positional signal for the longest possible output.
@@ -100,8 +97,8 @@ class ModelAdapter:
                         layer['self_attn'].forward(
                             layer_output, None, None, memories[mem_key])
                     layer_output, _ = layer['cross_attn'].forward(
-                        layer_output, pencoder_output.penc_output,
-                        pencoder_output.p_cross_attn_mask)
+                        layer_output, encoder_output.enc_output,
+                        encoder_output.cross_attn_mask)
                     layer_output = layer['ffn'].forward(layer_output)
                 # Return prediction at the final time-step to be consistent
                 # with the inference pipeline.

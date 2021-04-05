@@ -9,7 +9,7 @@ import exception
 import util
 
 
-def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_len,
+def translate_batch(session, sampler, x, x_mask, max_translation_len,
                     normalization_alpha, penalty_matrix=None):
     """Translate a batch using a RandomSampler or BeamSearchSampler.
 
@@ -17,9 +17,7 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
         session: a TensorFlow session.
         sampler: a BeamSearchSampler or RandomSampler object.
         x: input Tensor with shape (factors, max_seq_len, batch_size).
-        x_p: input Tensor with shape (max_seq_len, batch_size).
         x_mask: mask Tensor for x with shape (max_seq_len, batch_size).
-        x_p_mask: mask Tensor for x_p with shape (max_seq_len, batch_size).
         max_translation_len: integer specifying maximum translation length.
         normalization_alpha: float specifying alpha parameter for length
             normalization.
@@ -33,8 +31,6 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
 
     x_tiled = numpy.tile(x, reps=[1, 1, sampler.beam_size])
     x_mask_tiled = numpy.tile(x_mask, reps=[1, sampler.beam_size])
-    x_p_tiled = numpy.tile(x_p, reps=[1, sampler.beam_size])
-    x_p_mask_tiled = numpy.tile(x_p_mask, reps=[1, sampler.beam_size])
 
     feed_dict = {}
 
@@ -43,8 +39,6 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
         if config.model_type == 'rnn':
             feed_dict[model.inputs.x] = x_tiled
             feed_dict[model.inputs.x_mask] = x_mask_tiled
-            feed_dict[model.inputs.x_p] = x_p_tiled
-            feed_dict[model.inputs.x_p_mask] = x_p_mask_tiled
         else:
             assert config.model_type == 'transformer'
             # Inputs don't need to be tiled in the Transformer because it
@@ -52,8 +46,6 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
             # does its own tiling internally at the connection points.
             feed_dict[model.inputs.x] = x
             feed_dict[model.inputs.x_mask] = x_mask
-            feed_dict[model.inputs.x_p] = x_p
-            feed_dict[model.inputs.x_p_mask] = x_p_mask
             if penalty_matrix is None:
                 feed_dict[sampler.inputs.penalty_matrix] = [[0]]
             else:
@@ -68,7 +60,7 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
     # Run the sampler.
     translations, scores = session.run(sampler.outputs, feed_dict=feed_dict)
 
-    assert len(translations) == x.shape[-1] == x_p.shape[-1]
+    assert len(translations) == x.shape[-1]
     assert len(scores) == x.shape[-1]
 
     # Sort the translations by score. The scores are (optionally normalized)
@@ -81,14 +73,13 @@ def translate_batch(session, sampler, x, x_mask, x_p, x_p_mask, max_translation_
     return beams
 
 
-def translate_file(input_file, input_p_file, output_file, session, sampler, config,
+def translate_file(input_file, output_file, session, sampler, config,
                    max_translation_len, normalization_alpha, nbest=False,
                    minibatch_size=80, maxibatch_size=20, conservative_penalty=0, add_eos=False, beam_size=12):
     """Translates a source file using a RandomSampler or BeamSearchSampler.
 
     Args:
         input_file: file object from which source sentences will be read.
-        input_p_file: file object from which mt sentences will be read.
         output_file: file object to which translations will be written.
         session: TensorFlow session.
         sampler: BeamSearchSampler or RandomSampler object.
@@ -121,19 +112,19 @@ def translate_file(input_file, input_p_file, output_file, session, sampler, conf
         # Translate the minibatches and store the resulting beam (i.e.
         # translations and scores) for each sentence.
         beams = []
-        for x, x_p in minibatches:
+        for x in minibatches:
             if conservative_penalty:
-                x, x_mask, x_p, x_p_mask, penalty_matrix = util.prepare_data_unique(x, x_p, config, target_to_num,
-                                                                                    num_to_source, num_to_target,
-                                                                                    beam_size,
-                                                                                    conservative_penalty, add_eos,
-                                                                                    maxlen=None)
+                x, x_mask, penalty_matrix = util.prepare_data_unique(x, config, target_to_num,
+                                                                        num_to_source, num_to_target,
+                                                                        beam_size,
+                                                                        conservative_penalty, add_eos,
+                                                                        maxlen=None)
             else:
                 y_dummy = numpy.zeros(shape=(len(x),1))
-                x, x_mask, x_p, x_p_mask, _, _ = util.prepare_data(x, x_p, y_dummy, config.factors,
+                x, x_mask, _, _ = util.prepare_data(x, y_dummy, config.factors,
                                                 maxlen=None)
                 penalty_matrix = None
-            sample = translate_batch(session, sampler, x, x_mask, x_p, x_p_mask,
+            sample = translate_batch(session, sampler, x, x_mask,
                                      max_translation_len, normalization_alpha, penalty_matrix)
             beams.extend(sample)
             num_translated = num_prev_translated + len(beams)
@@ -168,13 +159,12 @@ def translate_file(input_file, input_p_file, output_file, session, sampler, conf
     maxibatch = []
     while True:
         line = input_file.readline()
-        line_p = input_p_file.readline()
         if line == "":
             if len(maxibatch) > 0:
                 translate_maxibatch(maxibatch, target_to_num, num_to_source, num_to_target, num_translated)
                 num_translated += len(maxibatch)
             break
-        maxibatch.append((line, line_p))
+        maxibatch.append(line)
         if len(maxibatch) == (maxibatch_size * minibatch_size):
             translate_maxibatch(maxibatch, target_to_num, num_to_source, num_to_target, num_translated)
             num_translated += len(maxibatch)

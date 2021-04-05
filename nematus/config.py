@@ -177,13 +177,6 @@ class ConfigSpecification:
             help='parallel training corpus (source)'))
 
         group.append(ParameterSpecification(
-            name='mt_dataset', default=None,
-            visible_arg_names=['--mt_dataset'],
-            derivation_func=_derive_mt_dataset,
-            type=str, metavar='PATH',
-            help='parallel training corpus (mt)'))
-
-        group.append(ParameterSpecification(
             name='target_dataset', default=None,
             visible_arg_names=['--target_dataset'],
             derivation_func=_derive_target_dataset,
@@ -194,7 +187,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='datasets', default=None,
             visible_arg_names=[], hidden_arg_names=['--datasets'],
-            type=str, metavar='PATH', nargs=3))
+            type=str, metavar='PATH', nargs=2))
 
         group.append(ParameterSpecification(
             name='f_source_dataset', default=None,
@@ -202,13 +195,6 @@ class ConfigSpecification:
             derivation_func=_derive_f_source_dataset,
             type=str, metavar='PATH',
             help='parallel training corpus for fine-tuning (source)'))
-
-        group.append(ParameterSpecification(
-            name='f_mt_dataset', default=None,
-            visible_arg_names=['--f_mt_dataset'],
-            derivation_func=_derive_f_mt_dataset,
-            type=str, metavar='PATH',
-            help='parallel training corpus for fine-tuning (mt)'))
 
         group.append(ParameterSpecification(
             name='f_target_dataset', default=None,
@@ -221,7 +207,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='f_datasets', default=None,
             visible_arg_names=[], hidden_arg_names=['--f_datasets'],
-            type=str, metavar='PATH', nargs=3))
+            type=str, metavar='PATH', nargs=2))
 
         group.append(ParameterSpecification(
             name='dictionaries', default=None,
@@ -277,7 +263,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='data_mode', default='single',
             visible_arg_names=['--data_mode'],
-            type=str, choices=['single', 'multiple', 'ape'],
+            type=str, choices=['monlig', 'bilig', 'single'],
             help='Format of input data. Either commonly single sentence per row used for APE task'
                  'or multiple consistency sentences per row used for doc-level task (default: single)'))
 
@@ -574,12 +560,6 @@ class ConfigSpecification:
             help='number of encoder layers (default: %(default)s)'))
 
         group.append(ParameterSpecification(
-            name='transformer_penc_depth', default=6,
-            visible_arg_names=['--transformer_penc_depth'],
-            type=int, metavar='INT',
-            help='number of post-encoder layers (default: %(default)s)'))
-
-        group.append(ParameterSpecification(
             name='transformer_dec_depth', default=6,
             visible_arg_names=['--transformer_dec_depth'],
             type=int, metavar='INT',
@@ -850,13 +830,6 @@ class ConfigSpecification:
             help='source validation corpus (default: %(default)s)'))
 
         group.append(ParameterSpecification(
-            name='valid_mt_dataset', default=None,
-            visible_arg_names=['--valid_mt_dataset'],
-            derivation_func=_derive_valid_mt_dataset,
-            type=str, metavar='PATH',
-            help='mt validation corpus (default: %(default)s)'))
-
-        group.append(ParameterSpecification(
             name='valid_target_dataset', default=None,
             visible_arg_names=['--valid_target_dataset'],
             derivation_func=_derive_valid_target_dataset,
@@ -867,7 +840,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='valid_datasets', default=None,
             hidden_arg_names=['--valid_datasets'],
-            type=str, metavar='PATH', nargs=3))
+            type=str, metavar='PATH', nargs=2))
 
         # consistency deixis set
         group.append(ParameterSpecification(
@@ -876,13 +849,6 @@ class ConfigSpecification:
             derivation_func=_derive_valid_deixis_source_dataset,
             type=str, metavar='PATH',
             help='deixis consistency source-side validation corpus (default: %(default)s)'))
-
-        group.append(ParameterSpecification(
-            name='valid_deixis_mt_dataset', default=None,
-            visible_arg_names=['--valid_deixis_mt_dataset'],
-            derivation_func=_derive_valid_deixis_mt_dataset,
-            type=str, metavar='PATH',
-            help='deixis consistency mt-side validation corpus (default: %(default)s)'))
 
         group.append(ParameterSpecification(
             name='valid_deixis_target_dataset', default=None,
@@ -894,7 +860,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='valid_deixis_datasets', default=None,
             hidden_arg_names=['--valid_deixis_datasets'],
-            type=str, metavar='PATH', nargs=3))
+            type=str, metavar='PATH', nargs=2))
 
         # consistency cohesion set
         group.append(ParameterSpecification(
@@ -903,13 +869,6 @@ class ConfigSpecification:
             derivation_func=_derive_valid_cohesion_source_dataset,
             type=str, metavar='PATH',
             help='cohesion consistency source-side validation corpus (default: %(default)s)'))
-
-        group.append(ParameterSpecification(
-            name='valid_cohesion_mt_dataset', default=None,
-            visible_arg_names=['--valid_cohesion_mt_dataset'],
-            derivation_func=_derive_valid_cohesion_mt_dataset,
-            type=str, metavar='PATH',
-            help='cohesion consistency mt-side validation corpus (default: %(default)s)'))
 
         group.append(ParameterSpecification(
             name='valid_cohesion_target_dataset', default=None,
@@ -921,7 +880,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='valid_cohesion_datasets', default=None,
             hidden_arg_names=['--valid_cohesion_datasets'],
-            type=str, metavar='PATH', nargs=3))
+            type=str, metavar='PATH', nargs=2))
 
         group.append(ParameterSpecification(
             name='valid_batch_size', default=80,
@@ -1091,7 +1050,7 @@ class ConfigSpecification:
         group.append(ParameterSpecification(
             name='sample_way', default='beam_search',
             visible_arg_names=['--sample_way'],
-            type=str, choices=['beam_search', 'randomly_sample', 'artificial'],
+            type=str, choices=['beam_search', 'randomly_sample'],
             help='the sampling strategy to generate candidates sentences (default: %(default)s)'))
 
         group.append(ParameterSpecification(
@@ -1114,13 +1073,6 @@ class ConfigSpecification:
             type=int, metavar='INT',
             help='maximum number of source sentences to generate candidates sentences '
                  'at one time (limited by device memory capacity) (default: %(default)s)'))
-
-        group.append(ParameterSpecification(
-            name='mrt_noise', default=0.1,
-            visible_arg_names=['--mrt_noise'],
-            type=float, metavar='FLOAT',
-            help='noise (including swapping, replacing and deleting) probability of randomly-sampled sentence in MRT(default: '
-                 '%(default)s)'))
 
         # Add command-line parameters for 'sampling' group.
 
@@ -1433,7 +1385,7 @@ def _check_config_consistency(spec, config, set_by_user):
 
     assert 0 <= config.f_ratio <= 1, 'ratio (between 0 and 1)'
     if config.f_ratio > 0:
-        if (config.f_source_dataset == None or config.f_mt_dataset == None or config.f_target_dataset == None) \
+        if (config.f_source_dataset == None or config.f_target_dataset == None) \
                 and config.f_datasets == None:
             msg = 'please feed in fine-tuning data in order to get a switch between bitex and sythetic data'
             error_messages.append(msg)
@@ -1535,18 +1487,11 @@ def _derive_source_dataset(config, meta_config):
     assert config.datasets is not None
     return config.datasets[0]
 
-def _derive_mt_dataset(config, meta_config):
-    if config.mt_dataset is not None:
-        return config.mt_dataset
-    assert config.datasets is not None
-    return config.datasets[1]
-
-
 def _derive_target_dataset(config, meta_config):
     if config.target_dataset is not None:
         return config.target_dataset
     assert config.datasets is not None
-    return config.datasets[2]
+    return config.datasets[1]
 
 def _derive_f_source_dataset(config, meta_config):
     if config.f_source_dataset is not None:
@@ -1557,15 +1502,6 @@ def _derive_f_source_dataset(config, meta_config):
     else:
         return config.f_datasets[0]
 
-def _derive_f_mt_dataset(config, meta_config):
-    if config.f_mt_dataset is not None:
-        return config.f_mt_dataset
-    # assert config.f_datasets is not None
-    if config.f_datasets is None:
-        return None
-    else:
-        return config.f_datasets[1]
-
 def _derive_f_target_dataset(config, meta_config):
     if config.f_target_dataset is not None:
         return config.f_target_dataset
@@ -1573,8 +1509,7 @@ def _derive_f_target_dataset(config, meta_config):
     if config.f_datasets is None:
         return None
     else:
-        return config.f_datasets[2]
-
+        return config.f_datasets[1]
 
 def _derive_source_vocab_sizes(config, meta_config):
     if config.source_vocab_sizes is not None:
@@ -1643,18 +1578,11 @@ def _derive_valid_source_dataset(config, meta_config):
         return config.valid_datasets[0]
     return None
 
-def _derive_valid_mt_dataset(config, meta_config):
-    if config.valid_mt_dataset is not None:
-        return config.valid_mt_dataset
-    if config.valid_datasets is not None:
-        return config.valid_datasets[1]
-    return None
-
 def _derive_valid_target_dataset(config, meta_config):
     if config.valid_target_dataset is not None:
         return config.valid_target_dataset
     if config.valid_datasets is not None:
-        return config.valid_datasets[2]
+        return config.valid_datasets[1]
     return None
 
 def _derive_valid_deixis_source_dataset(config, meta_config):
@@ -1664,18 +1592,11 @@ def _derive_valid_deixis_source_dataset(config, meta_config):
         return config.valid_deixis_datasets[0]
     return None
 
-def _derive_valid_deixis_mt_dataset(config, meta_config):
-    if config.valid_deixis_mt_dataset is not None:
-        return config.valid_deixis_mt_dataset
-    if config.valid_deixis_datasets is not None:
-        return config.valid_deixis_datasets[1]
-    return None
-
 def _derive_valid_deixis_target_dataset(config, meta_config):
     if config.valid_deixis_target_dataset is not None:
         return config.valid_deixis_target_dataset
     if config.valid_deixis_datasets is not None:
-        return config.valid_deixis_datasets[2]
+        return config.valid_deixis_datasets[1]
     return None
 
 def _derive_valid_cohesion_source_dataset(config, meta_config):
@@ -1685,18 +1606,11 @@ def _derive_valid_cohesion_source_dataset(config, meta_config):
         return config.valid_cohesion_datasets[0]
     return None
 
-def _derive_valid_cohesion_mt_dataset(config, meta_config):
-    if config.valid_cohesion_mt_dataset is not None:
-        return config.valid_cohesion_mt_dataset
-    if config.valid_cohesion_datasets is not None:
-        return config.valid_cohesion_datasets[1]
-    return None
-
 def _derive_valid_cohesion_target_dataset(config, meta_config):
     if config.valid_cohesion_target_dataset is not None:
         return config.valid_cohesion_target_dataset
     if config.valid_cohesion_datasets is not None:
-        return config.valid_cohesion_datasets[2]
+        return config.valid_cohesion_datasets[1]
     return None
 
 

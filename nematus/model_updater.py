@@ -21,7 +21,7 @@ class ModelUpdater(object):
     """
 
     def __init__(self, config, num_gpus, replicas, optimizer, global_step,
-                 summary_writer=None, target_dict=None):
+                 summary_writer=None):
         """Builds TF graph nodes for model updating (via _ModelUpdateGraph).
 
         Args:
@@ -45,29 +45,25 @@ class ModelUpdater(object):
                                         global_step)
 
         if config.loss_function == 'MRT':
-            self.target_dict = target_dict
-            if config.sample_way != 'artificial':
-                if config.sample_way == 'beam_search':
-                    self._mrt_sampler = BeamSearchSampler(
-                        models=[replicas[0]],
-                        configs=[config],
-                        beam_size=config.samplesN,
-                        conservative_penalty=0,
-                        conservative_way=None)
-                else:
-                    assert config.sample_way == 'randomly_sample'
-                    # Set beam_size to config.samplesN instead of using
-                    #      np.repeat to expand input in full_sampler()
-                    self._mrt_sampler = RandomSampler(
-                        models=[replicas[0]],
-                        configs=[config],
-                        beam_size=config.samplesN)
+            if config.sample_way == 'beam_search':
+                self._mrt_sampler = BeamSearchSampler(
+                    models=[replicas[0]],
+                    configs=[config],
+                    beam_size=config.samplesN,
+                    conservative_penalty=0,
+                    conservative_way=None)
             else:
-                self._mrt_sampler = None
+                assert config.sample_way == 'randomly_sample'
+                # Set beam_size to config.samplesN instead of using
+                #      np.repeat to expand input in full_sampler()
+                self._mrt_sampler = RandomSampler(
+                    models=[replicas[0]],
+                    configs=[config],
+                    beam_size=config.samplesN)
 
 
-    def update(self, session, x, x_mask, x_p, x_p_mask, y, y_mask, num_to_target, write_summary,
-               label_smoothing, penalty_weight=None, mask=1.0):
+    def update(self, session, x, x_mask, y, y_mask, num_to_target, write_summary,
+               label_smoothing, penalty_weight=None):
         """Updates the model for a single minibatch.
 
         Args:
@@ -97,35 +93,33 @@ class ModelUpdater(object):
             # Generate candidate sentences (sampling) based on source sentences in each minibatch
             # outputs are 'sampleN' times larger than inputs
             # replica only use single model since multi-GPU sampling isn't supported in Transformer
-            x, x_mask, x_p, x_p_mask, y, y_mask, refs, index, penalty_weight = \
+            x, x_mask, y, y_mask, refs, index, penalty_weight = \
                 mru.full_sampler(self._replicas[0], self._mrt_sampler, session,
-                                 self._config, x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, self.target_dict)
+                                 self._config, x, x_mask, y, y_mask, penalty_weight)
 
             # calculate evaluation metrics score for each sampled candidate sentence
             score = mru.cal_metrics_score(y, self._config, num_to_target, refs, index)
             # convert list to numpy list
             x = numpy.array(x)
             x_mask = numpy.array(x_mask)
-            x_p = numpy.array(x_p)
-            x_p_mask = numpy.array(x_p_mask)
             y = numpy.array(y)
             y_mask = numpy.array(y_mask)
 
         if (self._config.max_sentences_per_device != 0
             or self._config.max_tokens_per_device != 0):
             start_points = self._split_minibatch_for_device_size(
-                x_mask, x_p_mask, y_mask, self._config.max_sentences_per_device,
+                x_mask, y_mask, self._config.max_sentences_per_device,
                 self._config.max_tokens_per_device, index)
         else:
             n = len(self._replicas) * self._config.gradient_aggregation_steps
-            start_points = self._split_minibatch_into_n(x_mask, x_p_mask, y_mask, n)
+            start_points = self._split_minibatch_into_n(x_mask, y_mask, n)
 
         if self._config.loss_function == 'MRT':
-            split_x, split_x_mask, split_x_p, split_x_p_mask, split_y, split_y_mask, split_penalty_weight, split_score, weights, split_index = \
-                self._split_and_pad_minibatch_mrt(x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, score, start_points, index)
+            split_x, split_x_mask, split_y, split_y_mask, split_penalty_weight, split_score, weights, split_index = \
+                self._split_and_pad_minibatch_mrt(x, x_mask, y, y_mask, penalty_weight, score, start_points, index)
         else:
-            split_x, split_x_mask, split_x_p, split_x_p_mask, split_y, split_y_mask, weights, split_penalty_weight = \
-                self._split_and_pad_minibatch(x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, start_points)
+            split_x, split_x_mask, split_y, split_y_mask, weights, split_penalty_weight = \
+                self._split_and_pad_minibatch(x, x_mask, y, y_mask, penalty_weight, start_points)
 
         # Normalize the weights so that _ModelUpdateGraph can just sum the
         # weighted gradients from each sub-batch (without needing a
@@ -154,8 +148,6 @@ class ModelUpdater(object):
                     feed_dict[self._graph.penalty_weight[j]] = split_penalty_weight[i+j][0]
                 feed_dict[self._replicas[j].inputs.x] = split_x[i + j]
                 feed_dict[self._replicas[j].inputs.x_mask] = split_x_mask[i + j]
-                feed_dict[self._replicas[j].inputs.x_p] = split_x_p[i + j]
-                feed_dict[self._replicas[j].inputs.x_p_mask] = split_x_p_mask[i + j]
                 feed_dict[self._replicas[j].inputs.y] = split_y[i + j]
                 feed_dict[self._replicas[j].inputs.y_mask] = split_y_mask[i + j]
                 if self._config.loss_function == 'MRT':
@@ -167,7 +159,6 @@ class ModelUpdater(object):
                         feed_dict[self._replicas[j].inputs.mrt_penalty_weight] = split_penalty_weight[i + j][0]
                 feed_dict[self._replicas[j].inputs.training] = True
                 feed_dict[self._replicas[j].inputs.label_smoothing] = label_smoothing
-                feed_dict[self._replicas[j].inputs.mask] = mask
 
             if self._config.print_per_token_pro == False:
                 session.run([self._graph.accum_ops], feed_dict=feed_dict)
@@ -196,7 +187,7 @@ class ModelUpdater(object):
         else:
             return print_pro
 
-    def _split_minibatch_into_n(self, x_mask, x_p_mask, y_mask, n):
+    def _split_minibatch_into_n(self, x_mask, y_mask, n):
         """Determines how to split a minibatch into n equal-sized sub-batches.
 
         The sub-batch size is (approximately) the minibatch size divided by n,
@@ -213,33 +204,28 @@ class ModelUpdater(object):
         """
 
         source_lengths = numpy.sum(x_mask, axis=0)
-        mt_lengths = numpy.sum(x_p_mask, axis=0)
         target_lengths = numpy.sum(y_mask, axis=0)
-        assert len(source_lengths) == len(target_lengths) == len(mt_lengths)
+        assert len(source_lengths) == len(target_lengths)
         num_sents = len(source_lengths)
 
         # Calculate the source + target batch sizes, then divide by n to get
         # the max size of each sub-batch.
         s_total = max(source_lengths) * num_sents
-        m_total = max(mt_lengths) * num_sents
         t_total = max(target_lengths) * num_sents
-        soft_limit = math.ceil((s_total + m_total + t_total) / n)
+        soft_limit = math.ceil((s_total + t_total) / n)
 
         start_points = [0]
         while True:
             i = start_points[-1]
             s_longest = source_lengths[i]
-            m_longest = mt_lengths[i]
             t_longest = target_lengths[i]
             next_start_point = None
             for j in range(i+1, num_sents):
                 s_longest = max(s_longest, source_lengths[j])
-                m_longest = max(m_longest, mt_lengths[j])
                 t_longest = max(t_longest, target_lengths[j])
                 s_tokens = s_longest * (j-i+1)
-                m_tokens = m_longest * (j-i+1)
                 t_tokens = t_longest * (j-i+1)
-                if s_tokens + m_tokens + t_tokens > soft_limit:
+                if s_tokens + t_tokens > soft_limit:
                     # Allow the sub-batch to be over-filled, but only by one
                     # sentence worth of tokens.
                     next_start_point = j + 1
@@ -251,7 +237,7 @@ class ModelUpdater(object):
         assert len(start_points) <= n
         return start_points
 
-    def _split_minibatch_for_device_size(self, x_mask, x_p_mask, y_mask,
+    def _split_minibatch_for_device_size(self, x_mask, y_mask,
                                          max_sents_per_device=0,
                                          max_tokens_per_device=0, index=None):
         """Determines how to split a minibatch into device-sized sub-batches.
@@ -275,9 +261,8 @@ class ModelUpdater(object):
             s_index = dict(zip(index[0], list(range(len(index[0])))))
 
         source_lengths = numpy.sum(x_mask, axis=0)
-        mt_lengths = numpy.sum(x_p_mask, axis=0)
         target_lengths = numpy.sum(y_mask, axis=0)
-        assert len(source_lengths) == len(target_lengths) == len(mt_lengths)
+        assert len(source_lengths) == len(target_lengths)
         num_sents = len(source_lengths)
 
         # Determine where to split the minibatch to produce sub-batches that
@@ -290,18 +275,14 @@ class ModelUpdater(object):
                 while True:
                     i = start_points[-1]
                     s_longest = source_lengths[i]
-                    m_longest = mt_lengths[i]
                     t_longest = target_lengths[i]
                     next_start_point = None
                     for j in range(i+1, num_sents):
                         s_longest = max(s_longest, source_lengths[j])
-                        m_longest = max(m_longest, mt_lengths[j])
                         t_longest = max(t_longest, target_lengths[j])
                         s_tokens = s_longest * (j-i+1)
-                        m_tokens = m_longest * (j-i+1)
                         t_tokens = t_longest * (j-i+1)
                         if (s_tokens > max_tokens_per_device
-                            or m_tokens > max_tokens_per_device
                             or t_tokens > max_tokens_per_device):
                             next_start_point = j
                             break
@@ -314,18 +295,14 @@ class ModelUpdater(object):
                 while True:
                     i = start_points[-1]
                     s_longest = source_lengths[i]
-                    m_longest = mt_lengths[i]
                     t_longest = target_lengths[i]
                     next_start_point = None
                     for j in range(i + 1, num_sents):
                         s_longest = max(s_longest, source_lengths[j])
-                        m_longest = max(m_longest, mt_lengths[j])
                         t_longest = max(t_longest, target_lengths[j])
                         s_tokens = s_longest * (j - i + 1)
-                        m_tokens = m_longest * (j - i + 1)
                         t_tokens = t_longest * (j - i + 1)
                         if (s_tokens > max_tokens_per_device
-                                or m_tokens > max_tokens_per_device
                                 or t_tokens > max_tokens_per_device):
                             if j in s_index:
                                 next_start_point = j
@@ -343,7 +320,7 @@ class ModelUpdater(object):
 
         return start_points
 
-    def _split_and_pad_minibatch(self, x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, start_points):
+    def _split_and_pad_minibatch(self, x, x_mask, y, y_mask, penalty_weight, start_points):
         """Splits a minibatch according to a list of split points.
 
         Args:
@@ -369,8 +346,6 @@ class ModelUpdater(object):
 
         split_x = split_array(x, start_points)
         split_x_mask = split_array(x_mask, start_points)
-        split_x_p = split_array(x_p, start_points)
-        split_x_p_mask = split_array(x_p_mask, start_points)
         split_y = split_array(y, start_points)
         split_y_mask = split_array(y_mask, start_points)
         if penalty_weight is not None:
@@ -388,10 +363,6 @@ class ModelUpdater(object):
         max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_x_mask]
         split_x = trim_arrays(split_x, max_lens)
         split_x_mask = trim_arrays(split_x_mask, max_lens)
-
-        max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_x_p_mask]
-        split_x_p = trim_arrays(split_x_p, max_lens)
-        split_x_p_mask = trim_arrays(split_x_p_mask, max_lens)
 
         max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_y_mask]
         split_y = trim_arrays(split_y, max_lens)
@@ -419,8 +390,6 @@ class ModelUpdater(object):
 
         pad(split_x, padding_size)
         pad(split_x_mask, padding_size)
-        pad(split_x_p, padding_size)
-        pad(split_x_p_mask, padding_size)
         pad(split_y, padding_size)
         pad(split_y_mask, padding_size)
         if penalty_weight is not None:
@@ -430,10 +399,10 @@ class ModelUpdater(object):
         for i in range(padding_size):
             weights.append(0.0)
 
-        return split_x, split_x_mask, split_x_p, split_x_p_mask, split_y, split_y_mask, weights, penalty_weight
+        return split_x, split_x_mask, split_y, split_y_mask, weights, penalty_weight
 
 
-    def _split_and_pad_minibatch_mrt(self, x, x_mask, x_p, x_p_mask, y, y_mask, penalty_weight, score, start_points, index):
+    def _split_and_pad_minibatch_mrt(self, x, x_mask, y, y_mask, penalty_weight, score, start_points, index):
         """Splits a minibatch according to a list of split points (function basically same as _split_and_pad_minibatch),
         only difference is that the evaluation score of each sentence would also be split accordingly.
 
@@ -472,8 +441,6 @@ class ModelUpdater(object):
 
         split_x = split_array(x, start_points)
         split_x_mask = split_array(x_mask, start_points)
-        split_x_p = split_array(x_p, start_points)
-        split_x_p_mask = split_array(x_p_mask, start_points)
         split_y = split_array(y, start_points)
         split_y_mask = split_array(y_mask, start_points)
         split_score = split_array(score, start_points)
@@ -492,10 +459,6 @@ class ModelUpdater(object):
         max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_x_mask]
         split_x = trim_arrays(split_x, max_lens)
         split_x_mask = trim_arrays(split_x_mask, max_lens)
-
-        max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_x_p_mask]
-        split_x_p = trim_arrays(split_x_p, max_lens)
-        split_x_p_mask = trim_arrays(split_x_p_mask, max_lens)
 
         max_lens = [int(numpy.max(numpy.sum(m, axis=0))) for m in split_y_mask]
         split_y = trim_arrays(split_y, max_lens)
@@ -527,8 +490,6 @@ class ModelUpdater(object):
 
         pad(split_x, padding_size)
         pad(split_x_mask, padding_size)
-        pad(split_x_p, padding_size)
-        pad(split_x_p_mask, padding_size)
         pad(split_y, padding_size)
         pad(split_y_mask, padding_size)
         pad_index(tmp, padding_size)
@@ -540,7 +501,7 @@ class ModelUpdater(object):
             weights.append(0.0)
             split_score.append(1.0)
 
-        return split_x, split_x_mask, split_x_p, split_x_p_mask, split_y, split_y_mask, penalty_weight, split_score, weights, tmp
+        return split_x, split_x_mask, split_y, split_y_mask, penalty_weight, split_score, weights, tmp
 
 
 class _ModelUpdateGraph(object):

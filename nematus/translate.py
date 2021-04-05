@@ -94,7 +94,6 @@ def main(settings):
     # Translate the source file.
     translate_utils.translate_file(
         input_file=settings.input,
-        input_p_file=settings.input_p,
         output_file=settings.output,
         session=session,
         sampler=sampler,

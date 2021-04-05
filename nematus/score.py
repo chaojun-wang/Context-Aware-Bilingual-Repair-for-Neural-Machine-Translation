@@ -30,7 +30,7 @@ import transformer
 
 
 # FIXME pass in paths not file objects, since we need to know the paths anyway
-def calc_scores(source_file, mt_file, target_file, scorer_settings, configs):
+def calc_scores(source_file, target_file, scorer_settings, configs):
     """Calculates sentence pair scores using each of the specified models.
 
     By default (when scorer_settings.normalization_alpha is 0.0), the score
@@ -78,7 +78,6 @@ def calc_scores(source_file, mt_file, target_file, scorer_settings, configs):
 
                 text_iterator = TextIterator(
                     source=source_file.name,
-                    mt=mt_file.name,
                     target=target_file.name,
                     source_dicts=config.source_dicts,
                     target_dict=config.target_dict,
@@ -120,7 +119,7 @@ def write_scores(source_file, target_file, scores, output_file, scorer_settings)
         output_file.write('{0}\n'.format(score_str))
 
 
-def main(source_file, mt_file, target_file, output_file, scorer_settings):
+def main(source_file, target_file, output_file, scorer_settings):
     # load model model_options
     configs = []
     for model in scorer_settings.models:
@@ -128,13 +127,12 @@ def main(source_file, mt_file, target_file, output_file, scorer_settings):
         setattr(config, 'reload', model)
         configs.append(config)
 
-    scores = calc_scores(source_file, mt_file, target_file, scorer_settings, configs)
+    scores = calc_scores(source_file, target_file, scorer_settings, configs)
     write_scores(source_file, target_file, scores, output_file, scorer_settings)
 
 
 if __name__ == "__main__":
     main(source_file=scorer_settings.source,
-         mt_file=scorer_settings.mt,
          target_file=scorer_settings.target,
          output_file=scorer_settings.output,
          scorer_settings=scorer_settings)

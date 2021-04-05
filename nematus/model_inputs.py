@@ -17,16 +17,6 @@ class ModelInputs(object):
             shape=(seq_len, batch_size),
             dtype=tf.float32)
 
-        self.x_p = tf.placeholder(
-            name='x_p',
-            shape=(seq_len, batch_size),
-            dtype=tf.int32)
-
-        self.x_p_mask = tf.placeholder(
-            name='x_p_mask',
-            shape=(seq_len, batch_size),
-            dtype=tf.float32)
-
         self.y = tf.placeholder(
             name='y',
             shape=(seq_len, batch_size),
@@ -49,11 +39,6 @@ class ModelInputs(object):
 
         self.label_smoothing = tf.placeholder(
             name='label_smoothing',
-            shape=(),
-            dtype=tf.float32)
-
-        self.mask = tf.placeholder(
-            name='mask',
             shape=(),
             dtype=tf.float32)
 

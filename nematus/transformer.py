@@ -25,7 +25,7 @@ class Transformer(object):
         # Set attributes
         self.config = config
         self.source_vocab_size = config.source_vocab_sizes[0]
-        self.mt_vocab_size = self.target_vocab_size = config.target_vocab_size
+        self.target_vocab_size = config.target_vocab_size
         self.name = 'transformer'
 
         # Placeholders
@@ -34,8 +34,6 @@ class Transformer(object):
         # Convert from time-major to batch-major, handle factors
         self.source_ids, \
             self.source_mask, \
-            self.mt_ids, \
-            self.mt_mask, \
             self.target_ids_in, \
             self.target_ids_out, \
             self.target_mask = self._convert_inputs(self.inputs)
@@ -44,7 +42,6 @@ class Transformer(object):
         self.scores = self.inputs.scores
         self.index = self.inputs.index
         self.label_smoothing = self.inputs.label_smoothing
-        self.mask = self.inputs.mask
         self.mrt_penalty_weight = self.inputs.mrt_penalty_weight
 
         # Build the common parts of the graph.
@@ -59,18 +56,12 @@ class Transformer(object):
             with tf.name_scope('{:s}_encode'.format(self.name)):
                 enc_output, cross_attn_mask = self.enc.encode(
                     self.source_ids, self.source_mask)
-            # optionally zero out all of source
-            enc_output = tf.multiply(enc_output, self.mask)
 
-            # Encode mt sequences
-            with tf.name_scope('{:s}_pencode'.format(self.name)):
-                penc_output, p_cross_attn_mask = self.penc.encode(
-                    self.mt_ids, self.mt_mask, enc_output, cross_attn_mask)
             # Decode into target sequences
             with tf.name_scope('{:s}_decode'.format(self.name)):
                 logits = self.dec.decode_at_train(self.target_ids_in,
-                                                  penc_output,
-                                                  p_cross_attn_mask)
+                                                  enc_output,
+                                                  cross_attn_mask)
             # Instantiate loss layer(s)
             loss_layer = MaskedCrossEntropy(self.dec_vocab_size,
                                             self.label_smoothing,
@@ -107,9 +98,9 @@ class Transformer(object):
             # Instantiate embedding layer(s)
             if not self.config.tie_encoder_decoder_embeddings:
                 enc_vocab_size = self.source_vocab_size
-                penc_vocab_size = dec_vocab_size = self.target_vocab_size
+                dec_vocab_size = self.target_vocab_size
             else:
-                assert self.source_vocab_size == self.target_vocab_size == self.mt_vocab_size, \
+                assert self.source_vocab_size == self.target_vocab_size, \
                     'Input and output vocabularies should be identical when tying embedding tables.'
                 enc_vocab_size = penc_vocab_size = dec_vocab_size = self.source_vocab_size
 
@@ -119,13 +110,13 @@ class Transformer(object):
                                                      FLOAT_DTYPE,
                                                      name='encoder_embedding_layer')
             if not self.config.tie_encoder_decoder_embeddings:
-                pencoder_embedding_layer = decoder_embedding_layer = EmbeddingLayer(dec_vocab_size,
+                decoder_embedding_layer = EmbeddingLayer(dec_vocab_size,
                                                          self.config.embedding_size,
                                                          self.config.state_size,
                                                          FLOAT_DTYPE,
                                                          name='decoder_embedding_layer')
             else:
-                pencoder_embedding_layer = decoder_embedding_layer = encoder_embedding_layer
+                decoder_embedding_layer = encoder_embedding_layer
 
             if not self.config.tie_decoder_embeddings:
                 softmax_projection_layer = EmbeddingLayer(dec_vocab_size,
@@ -141,10 +132,6 @@ class Transformer(object):
                                           encoder_embedding_layer,
                                           self.training,
                                           'encoder')
-            self.penc = TransformerPEncoder(self.config,
-                                          pencoder_embedding_layer,
-                                          self.training,
-                                          'pencoder')
             self.dec = TransformerDecoder(self.config,
                                           decoder_embedding_layer,
                                           softmax_projection_layer,
@@ -174,8 +161,6 @@ class Transformer(object):
         # from x and ignore any other factors.
         source_ids = tf.transpose(inputs.x[0], perm=[1,0])
         source_mask = tf.transpose(inputs.x_mask, perm=[1,0])
-        mt_ids = tf.transpose(inputs.x_p, perm=[1, 0])
-        mt_mask = tf.transpose(inputs.x_p_mask, perm=[1, 0])
         target_ids_out = tf.transpose(inputs.y, perm=[1,0])
         target_mask = tf.transpose(inputs.y_mask, perm=[1,0])
 
@@ -188,7 +173,7 @@ class Transformer(object):
         # cut off the final <EOS> token of each sentence, since eos is no need in target input
         tmp = tmp[:-1, :]
         target_ids_in = tf.transpose(tmp, perm=[1,0])
-        return (source_ids, source_mask, mt_ids, mt_mask, target_ids_in, target_ids_out,
+        return (source_ids, source_mask, target_ids_in, target_ids_out,
                 target_mask)
 
 
@@ -282,102 +267,6 @@ class TransformerEncoder(object):
                 enc_output = self.encoder_stack[layer_id]['ffn'].forward(enc_output)
         return enc_output, cross_attn_mask
 
-
-class TransformerPEncoder(object):
-    """ The post-encoder module used within the transformer model. """
-
-    def __init__(self,
-                 config,
-                 embedding_layer,
-                 training,
-                 name):
-        # Set attributes
-        self.config = config
-        self.embedding_layer = embedding_layer
-        self.training = training
-        self.name = name
-
-        # Track layers
-        self.pecoder_stack = dict()
-        self.is_final_layer = False
-
-        # Create nodes
-        self._build_graph()
-
-    def _embed(self, index_sequence):
-        """ Embeds mt-side indices to obtain the corresponding dense tensor representations. """
-        return self.embedding_layer.embed(index_sequence)
-
-    def _build_graph(self):
-        """ Defines the model graph. """
-        # Initialize layers
-        with tf.variable_scope(self.name):
-            for layer_id in range(1, self.config.transformer_penc_depth + 1):
-                layer_name = 'layer_{:d}'.format(layer_id)
-                # Check if constructed layer is final
-                if layer_id == self.config.transformer_penc_depth:
-                    self.is_final_layer = True
-                # Specify ffn dimensions sequence
-                ffn_dims = [self.config.transformer_ffn_hidden_size, self.config.state_size]
-                with tf.variable_scope(layer_name):
-                    # Build layer blocks (see layers.py)
-                    self_attn_block = AttentionBlock(self.config,
-                                                     FLOAT_DTYPE,
-                                                     self_attention=True,
-                                                     training=self.training)
-                    cross_attn_block = AttentionBlock(self.config,
-                                                      FLOAT_DTYPE,
-                                                      self_attention=False,
-                                                      training=self.training)
-                    ffn_block = FFNBlock(self.config,
-                                         ffn_dims,
-                                         FLOAT_DTYPE,
-                                         is_final=self.is_final_layer,
-                                         training=self.training)
-
-                # Maintain layer-wise dict entries for easier data-passing (may change later)
-                self.pecoder_stack[layer_id] = dict()
-                self.pecoder_stack[layer_id]['self_attn'] = self_attn_block
-                self.pecoder_stack[layer_id]['cross_attn'] = cross_attn_block
-                self.pecoder_stack[layer_id]['ffn'] = ffn_block
-
-    def encode(self, mt_ids, mt_mask, enc_output, cross_attn_mask):
-        """ Returns the probability distribution over target-side tokens conditioned on the output of the encoder;
-         performs decoding in parallel at training time. """
-        def _prepare_mt():
-            """ Pre-processes inputs to the encoder and generates the corresponding attention masks."""
-            # Embed
-            mt_embeddings = self._embed(mt_ids)
-            # Obtain length and depth of the input tensors
-            _, time_steps, depth = get_shape_list(mt_embeddings)
-            # Transform input mask into attention mask
-            inverse_mask = tf.cast(tf.equal(mt_mask, 0.0), dtype=FLOAT_DTYPE)
-            attn_mask = inverse_mask * -1e9
-            # Expansion to shape [batch_size, 1, 1, time_steps] is needed for compatibility with attention logits
-            attn_mask = tf.expand_dims(tf.expand_dims(attn_mask, 1), 1)
-            # Differentiate between self-attention and cross-attention masks for further, optional modifications
-            self_attn_mask = attn_mask
-            p_cross_attn_mask = attn_mask
-            # Add positional encodings
-            positional_signal = get_positional_signal(time_steps, depth, FLOAT_DTYPE)
-            mt_embeddings += positional_signal
-            # Apply dropout
-            if self.config.transformer_dropout_embeddings > 0:
-                mt_embeddings = tf.layers.dropout(mt_embeddings,
-                                                      rate=self.config.transformer_dropout_embeddings, training=self.training)
-            return mt_embeddings, self_attn_mask, p_cross_attn_mask
-
-        with tf.variable_scope(self.name):
-            # Prepare inputs to the post-encoder, get attention masks
-            penc_inputs, self_attn_mask, p_cross_attn_mask = _prepare_mt()
-            # Propagate inputs through the encoder stack
-            penc_output = penc_inputs
-            for layer_id in range(1, self.config.transformer_penc_depth + 1):
-                penc_output, _ = self.pecoder_stack[layer_id]['self_attn'].forward(penc_output, None, self_attn_mask)
-                penc_output, _ = \
-                    self.pecoder_stack[layer_id]['cross_attn'].forward(penc_output, enc_output, cross_attn_mask)
-                penc_output = self.pecoder_stack[layer_id]['ffn'].forward(penc_output)
-        return penc_output, p_cross_attn_mask
 
 
 class TransformerDecoder(object):
