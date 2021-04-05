@@ -1,0 +1,14 @@
+src= # source language ID
+mt= # hypothesis language ID
+tgt= # target language ID
+
+# scripts directory of moses decoder: http://www.statmt.org/moses/
+# you do not need to compile moses; a simple download is sufficient
+moses_scripts= # directory of moses scripts decoder
+
+#scripts for subword segmentation: https://github.com/rsennrich/subword-nmt
+bpe_scripts= # directory of subword-nmt
+
+#nematus: https://github.com/EdinburghNLP/nematus
+nematus_home= # directory of nematus
+
