@@ -2,6 +2,8 @@
 
 The code is modified based on [Nematus](https://github.com/EdinburghNLP/nematus). Three branch are there in the respository, **master**: implement Transference and adapt to the document-level scenorio; **2-way**: the mirror implementation of *master* branch with single input; **scripts**: scripts and configuration files to train and evaluate models.
 
+[paper](https://www.aclweb.org/anthology/2021.nodalida-main.34/), [poster](https://github.com/zippotju/Context-Aware-Bilingual-Repair-for-Neural-Machine-Translation/blob/master/source/poster.pdf)
+
 ## 1. Requirements
 
 Python 3.6
